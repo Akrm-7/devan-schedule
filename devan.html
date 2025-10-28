@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>デバンスケジュール – 顧客/管理 統合</title>
+  <script src="/_sdk/data_sdk.js"></script>
+  <script src="/_sdk/element_sdk.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { view-transition-name: root; }
+    body { box-sizing: border-box; }
+    .status-badge, .status-select { transition: all .2s ease; }
+    .status-select { cursor: pointer; }
+    .status-select:hover { opacity:.9; }
+    .loading-spinner { border: 2px solid #f3f4f6; border-top: 2px solid #3b82f6; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0%{ transform:rotate(0) } 100%{ transform:rotate(360deg) } }
+    .customer-header { background: linear-gradient(135deg,#4f46e5 0%, #06b6d4 100%); }
+    .admin-header { background: linear-gradient(135deg,#667eea 0%, #764ba2 100%); }
+  </style>
+</head>
+<body class="min-h-full bg-gray-50">
+  <div class="container mx-auto px-4 py-8 max-w-6xl">
+    <!-- モード切替 -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="text-sm text-gray-500">モード切替：
+        <button id="to-customer" class="ml-2 px-3 py-1 rounded-md bg-white border text-gray-700 hover:bg-gray-100">顧客用</button>
+        <button id="to-admin" class="ml-2 px-3 py-1 rounded-md bg-white border text-gray-700 hover:bg-gray-100">管理者用</button>
+      </div>
+      <div class="text-xs text-gray-400">URL クエリでも切替可：<code>?mode=customer</code> / <code>?mode=admin</code></div>
+    </div>
+
+    <!-- ===== 管理者ログイン ===== -->
+    <div id="admin-login" class="bg-white rounded-lg shadow-md p-6 mb-8 border-l-4 border-purple-500 hidden">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+        <svg class="h-6 w-6 text-purple-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c1.657 0 3-1.567 3-3.5S13.657 4 12 4 9 5.567 9 7.5 10.343 11 12 11zm-7 9a7 7 0 0114 0H5z"/></svg>
+        管理者ログイン
+      </h2>
+      <!-- 修正：ログインフォームを垂直レイアウトに変更 -->
+      <form id="login-form" class="space-y-4 max-w-md">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">ID</label>
+          <input id="login-id" type="text" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="admin" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
+          <input id="login-pass" type="password" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="0000" />
+        </div>
+        <div>
+          <button id="login-button" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200">ログイン</button>
+        </div>
+      </form>
+      <p class="text-xs text-gray-500 mt-2">ヒント: 初期値 ID <code>admin</code> / パスワード <code>0000</code></p>
+    </div>
+
+    <!-- ===== 顧客用ヘッダー ===== -->
+    <header id="customer-header" class="mb-8 hidden">
+      <div class="customer-header rounded-lg p-6 text-white mb-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 id="page-title-cust" class="text-3xl font-bold mb-2">デバンスケジュール</h1>
+            <p id="company-name" class="text-blue-100">株式会社○○</p>
+            <p class="text-blue-100 text-sm mt-1">リアルタイム更新 - 最新の進捗状況をご確認いただけます</p>
+          </div>
+          <div class="text-right">
+            <button id="refresh-btn" class="bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg px-4 py-2 transition-colors duration-200">
+              <svg id="refresh-icon" class="h-5 w-5 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span class="text-sm font-medium">更新</span>
+            </button>
+            <p class="text-xs text-blue-100 mt-1">最終更新: <span id="last-update">--:--</span></p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ===== 顧客用：統計サマリー ===== -->
+    <!-- 修正：顧客用統計にアイコンを追加 -->
+    <div id="customer-stats" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8 hidden">
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+          <div class="p-2 bg-blue-100 rounded-lg">
+            <svg class="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+          </div>
+          <div class="ml-4">
+            <p class="text-sm font-medium text-gray-600">総スケジュール数</p>
+            <p id="cust-total" class="text-2xl font-bold text-gray-900">0</p>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+          <div class="p-2 bg-gray-100 rounded-lg">
+            <svg class="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <div class="ml-4">
+            <p class="text-sm font-medium text-gray-600">予定</p>
+            <p id="cust-scheduled" class="text-2xl font-bold text-gray-900">0</p>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+          <div class="p-2 bg-blue-100 rounded-lg">
+            <svg class="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </div>
+          <div class="ml-4">
+            <p class="text-sm font-medium text-gray-600">進行中</p>
+            <p id="cust-inprogress" class="text-2xl font-bold text-gray-900">0</p>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center">
+          <div class="p-2 bg-green-100 rounded-lg">
+            <svg class="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <div class="ml-4">
+            <p class="text-sm font-medium text-gray-600">完了</p>
+            <p id="cust-completed" class="text-2xl font-bold text-gray-900">0</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 顧客用：一覧 ===== -->
+    <div id="customer-list-wrap" class="bg-white rounded-lg shadow-md overflow-hidden hidden">
+      <div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
+        <div class="flex justify-between items-center">
+          <div>
+            <h2 class="text-xl font-semibold text-gray-800">デバンスケジュール一覧</h2>
+            <p id="cust-record-count" class="text-sm text-gray-600 mt-1">0件のスケジュール</p>
+          </div>
+          <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-2">
+              <div class="flex items-center"><div class="w-3 h-3 bg-gray-500 rounded-full mr-1"></div><span class="text-xs text-gray-600">予定</span></div>
+              <div class="flex items-center"><div class="w-3 h-3 bg-blue-500 rounded-full mr-1"></div><span class="text-xs text-gray-600">進行中</span></div>
+              <div class="flex items-center"><div class="w-3 h-3 bg-green-500 rounded-full mr-1"></div><span class="text-xs text-gray-600">完了</span></div>
+              <div class="flex items-center"><div class="w-3 h-3 bg-yellow-500 rounded-full mr-1"></div><span class="text-xs text-gray-600">保留</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="customer-list" class="divide-y divide-gray-200">
+        <div id="cust-empty" class="px-6 py-12 text-center text-gray-500">
+          <svg class="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+          <p class="text-lg font-medium mb-2">スケジュールデータがありません</p>
+          <p class="text-sm">管理者によってスケジュールが登録されると、こちらに表示されます</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 管理者用ヘッダー ===== -->
+    <header id="admin-header" class="mb-8 hidden">
+      <div class="admin-header rounded-lg p-6 text-white mb-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 id="page-title-admin" class="text-3xl font-bold mb-2">デバンスケジュール管理</h1>
+            <p class="text-blue-100">管理者用 - 全てのスケジュールデータを管理</p>
+          </div>
+          <div class="bg-white bg-opacity-20 rounded-lg px-2 py-2 flex items-center space-x-2">
+            <span class="text-sm font-medium">🔐 管理者モード</span>
+            <button id="logout-btn" class="text-xs bg-white bg-opacity-30 hover:bg-opacity-40 rounded px-2 py-1">ログアウト</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ===== 管理者用：新規追加フォーム ===== -->
+    <div id="admin-form" class="bg-white rounded-lg shadow-md p-6 mb-8 border-l-4 border-blue-500 hidden">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+        <svg class="h-6 w-6 text-blue-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+        新規スケジュール追加
+      </h2>
+      <form id="add-form" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div>
+          <label for="container-number" class="block text-sm font-medium text-gray-700 mb-1">コンテナ番号</label>
+          <textarea id="container-number" name="container_number" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none" placeholder="例: ABCD1234567&#10;EFGH2345678&#10;IJKL3456789&#10;（1行に1つずつ入力）" required></textarea>
+          <p class="text-xs text-gray-500 mt-1">複数のコンテナ番号を1行に1つずつ入力してください</p>
+        </div>
+        <div>
+          <label for="devan-date" class="block text-sm font-medium text-gray-700 mb-1">デバン予定日</label>
+          <input type="date" id="devan-date" name="devan_date" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" required />
+        </div>
+        <div>
+          <label for="devan-status" class="block text-sm font-medium text-gray-700 mb-1">デバン状況</label>
+          <select id="devan-status" name="devan_status" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" required>
+            <option value="">選択してください</option>
+            <option value="予定">予定</option>
+            <option value="進行中">進行中</option>
+            <option value="完了">完了</option>
+            <option value="保留">保留</option>
+          </select>
+        </div>
+        <div class="flex items-end">
+          <button type="submit" id="add-button" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200 flex items-center justify-center">
+            <span id="add-button-text">新規追加</span>
+            <div id="add-loading" class="loading-spinner ml-2 hidden"></div>
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- ===== 管理者用：統計 ===== -->
+    <div id="admin-stats" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 hidden">
+      <div class="bg-white rounded-lg shadow p-6"><div class="flex items-center"><div class="p-2 bg-blue-100 rounded-lg"><svg class="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg></div><div class="ml-4"><p class="text-sm font-medium text-gray-600">総スケジュール数</p><p id="adm-total" class="text-2xl font-bold text-gray-900">0</p></div></div></div>
+      <div class="bg-white rounded-lg shadow p-6"><div class="flex items-center"><div class="p-2 bg-gray-100 rounded-lg"><svg class="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div><div class="ml-4"><p class="text-sm font-medium text-gray-600">予定</p><p id="adm-scheduled" class="text-2xl font-bold text-gray-900">0</p></div></div></div>
+      <div class="bg-white rounded-lg shadow p-6"><div class="flex items-center"><div class="p-2 bg-blue-100 rounded-lg"><svg class="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></div><div class="ml-4"><p class="text-sm font-medium text-gray-600">進行中</p><p id="adm-inprogress" class="text-2xl font-bold text-gray-900">0</p></div></div></div>
+      <div class="bg-white rounded-lg shadow p-6"><div class="flex items-center"><div class="p-2 bg-green-100 rounded-lg"><svg class="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div><div class="ml-4"><p class="text-sm font-medium text-gray-600">完了</p><p id="adm-completed" class="text-2xl font-bold text-gray-900">0</p></div></div></div>
+    </div>
+
+    <!-- ===== 管理者用：一覧 ===== -->
+    <div id="admin-list-wrap" class="bg-white rounded-lg shadow-md overflow-hidden hidden">
+      <div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
+        <div class="flex justify-between items-center">
+          <div>
+            <h2 class="text-xl font-semibold text-gray-800">デバンスケジュール一覧</h2>
+            <p id="adm-record-count" class="text-sm text-gray-600 mt-1">0件のスケジュール</p>
+          </div>
+          <div class="flex space-x-2"></div>
+        </div>
+      </div>
+      <div id="admin-list" class="divide-y divide-gray-200">
+        <div id="adm-empty" class="px-6 py-12 text-center text-gray-500">
+          <svg class="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+          <p class="text-lg font-medium mb-2">まだスケジュールが登録されていません</p>
+          <p class="text-sm">上のフォームから新しいスケジュールを追加してください</p>
+        </div>
+      </div>
+    </div>
+
+    <footer class="mt-8 text-center text-gray-500 text-sm">
+      <p>このページは自動更新されます。最新の情報をご確認ください。</p>
+    </footer>
+  </div>
+
+  <script>
+    // ===== 共通設定 =====
+    const defaultConfig = {
+      page_title: "デバンスケジュール",
+      company_name: "株式会社○○",
+      add_button_text: "新規追加",
+      status_options: "予定,進行中,完了,保留",
+      primary_color: "#3b82f6",
+      surface_color: "#ffffff",
+      text_color: "#1f2937",
+      success_color: "#10b981",
+      warning_color: "#f59e0b"
+    };
+
+    let scheduleData = [];
+
+    // ===== 簡易認証（クライアント側・簡易運用向け） =====
+    const ADMIN_CREDENTIALS = { user: 'kokusai', pass: 'kokusaitokyo' };
+    function isAuthed(){
+      try { return localStorage.getItem('devan_admin_authed') === '1'; }
+      catch (e) { return false; }
+    }
+    function setAuthed(v){
+      try {
+        if (v) { localStorage.setItem('devan_admin_authed','1'); }
+        else { localStorage.removeItem('devan_admin_authed'); }
+      } catch (e) {}
+    }
+    function showLogin(show){
+      var el = document.getElementById('admin-login');
+      if (el) { el.classList.toggle('hidden', !show); }
+    }
+
+    // ===== SDK が無い環境向けモック =====
+    (function ensureSdk(){
+      // dataSdk のローカル永続版（SDK不要）
+      if (!window.dataSdk) {
+        console.warn('dataSdk が無いため、localStorage+BroadcastChannel 版を使用します');
+        var STORAGE_KEY = 'devan_schedules_v1';
+        var CHANNEL = 'devan_bus';
+        var bc = ('BroadcastChannel' in window) ? new BroadcastChannel(CHANNEL) : null;
+        var listeners = new Set();
+
+        var load = function(){
+          try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+          catch (e) { return []; }
+        };
+        var notify = function(){ listeners.forEach(function(fn){ fn(load()); }); };
+        var save = function(data){
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+          if (bc) bc.postMessage({ type: 'changed' });
+          notify();
+        };
+
+        // 初期データ（初回だけ）
+        if (!localStorage.getItem(STORAGE_KEY)) {
+          var seed = [
+            { __backendId: (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+'-1'), container_number: 'OOCU8027781', devan_date: new Date(Date.now()+86400000).toISOString(), devan_status:'予定', created_at: new Date().toISOString() },
+            { __backendId: (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+'-2'), container_number: 'TIIU2029097', devan_date: new Date().toISOString(), devan_status:'進行中', created_at: new Date().toISOString() },
+            { __backendId: (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+'-3'), container_number: 'TSSU2079420', devan_date: new Date(Date.now()-86400000*2).toISOString(), devan_status:'完了', created_at: new Date().toISOString() }
+          ];
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
+        }
+
+        // storage/BC で他タブと同期
+        if (bc) bc.addEventListener('message', function(e){ if (e && e.data && e.data.type === 'changed') notify(); });
+        window.addEventListener('storage', function(e){ if (e.key === STORAGE_KEY) notify(); });
+
+        window.dataSdk = {
+          init: async function(handler){
+            if (handler && handler.onDataChanged) { listeners.add(handler.onDataChanged); handler.onDataChanged(load()); }
+            return { isOk: true };
+          },
+          create: async function(item){
+            var withId = Object.assign({
+              __backendId: (item && item.__backendId) ? item.__backendId : (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+'-x'),
+              created_at: (item && item.created_at) ? item.created_at : new Date().toISOString()
+            }, item || {});
+            var data = load(); data.push(withId); save(data); return { isOk: true, data: withId };
+          },
+          update: async function(item){
+            var data = load().map(function(s){ return s.__backendId === item.__backendId ? Object.assign({}, s, item) : s; });
+            save(data); return { isOk: true };
+          },
+          delete: async function(item){
+            var data = load().filter(function(s){ return s.__backendId !== item.__backendId; });
+            save(data); return { isOk: true };
+          }
+        };
+      }
+
+      // elementSdk の簡易モック
+      if (!window.elementSdk) {
+        console.warn('elementSdk が無いため、簡易モックを使用します');
+        window.elementSdk = {
+          config: Object.assign({}, defaultConfig),
+          init: function(opts){ this.config = Object.assign({}, opts && opts.defaultConfig ? opts.defaultConfig : defaultConfig); this._onChange = opts && opts.onConfigChange; if (this._onChange) this._onChange(this.config); },
+          setConfig: function(patch){ this.config = Object.assign({}, this.config, patch || {}); if (this._onChange) this._onChange(this.config); }
+        };
+      }
+    })();
+
+    // ===== 共通ユーティリティ =====
+    function getStatusColor(status){
+      var cfg = (window.elementSdk && window.elementSdk.config) ? window.elementSdk.config : defaultConfig;
+      switch(status){
+        case '予定': return '#6b7280';
+        case '進行中': return cfg.primary_color || defaultConfig.primary_color;
+        case '完了': return cfg.success_color || defaultConfig.success_color;
+        case '保留': return cfg.warning_color || defaultConfig.warning_color;
+        default: return '#6b7280';
+      }
+    }
+
+    var dataHandler = { onDataChanged: function(data){ scheduleData = data; renderAll(); } };
+
+    function jpDate(d){
+      var dt = new Date(d);
+      if (Number.isNaN(+dt)) return '-';
+      return dt.toLocaleDateString('ja-JP', { year:'numeric', month:'long', day:'numeric', weekday:'short' });
+    }
+
+    // ===== 顧客用描画 =====
+    function renderCustomer(){
+      var list = document.getElementById('customer-list');
+      var empty = document.getElementById('cust-empty');
+      if (!list) return;
+
+      var sorted = scheduleData.slice().sort(function(a,b){ return new Date(b.devan_date) - new Date(a.devan_date); });
+      list.querySelectorAll('[data-id]').forEach(function(n){ n.remove(); });
+
+      if(sorted.length===0){ empty.style.display='block'; } else { empty.style.display='none'; }
+
+      for(var i=0;i<sorted.length;i++){
+        var s = sorted[i];
+        var row = document.createElement('div');
+        row.dataset.id = s.__backendId;
+        row.className = 'px-6 py-4 hover:bg-gray-50 transition-colors duration-150';
+
+        // 修正：HTML文字列を1行で記述
+        row.innerHTML = '<div class="flex items-center"><div class="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4"><div><p class="text-sm font-medium text-gray-900">'+s.container_number+'</p><p class="text-xs text-gray-500">コンテナ番号</p></div><div><p class="text-sm text-gray-900">'+jpDate(s.devan_date)+'</p><p class="text-xs text-gray-500">デバン予定日</p></div><div class="flex items-center"><span class="status-badge inline-flex items-center px-3 py-1 rounded-full text-sm font-medium text-white" style="background-color:'+getStatusColor(s.devan_status)+'">'+s.devan_status+'</span></div></div></div>';
+
+        list.appendChild(row);
+      }
+
+      // stats
+      document.getElementById('cust-total').textContent = String(scheduleData.length);
+      document.getElementById('cust-scheduled').textContent = String(scheduleData.filter(function(s){return s.devan_status==='予定';}).length);
+      document.getElementById('cust-inprogress').textContent = String(scheduleData.filter(function(s){return s.devan_status==='進行中';}).length);
+      document.getElementById('cust-completed').textContent = String(scheduleData.filter(function(s){return s.devan_status==='完了';}).length);
+      document.getElementById('cust-record-count').textContent = scheduleData.length + '件のスケジュール';
+    }
+
+    // ===== 管理者用描画 =====
+    function renderAdmin(){
+      var list = document.getElementById('admin-list');
+      var empty = document.getElementById('adm-empty');
+      if (!list) return;
+
+      list.querySelectorAll('[data-id]').forEach(function(n){ n.remove(); });
+
+      if(scheduleData.length===0){ empty.style.display='block'; } else { empty.style.display='none'; }
+
+      for(var i=0;i<scheduleData.length;i++){
+        var s = scheduleData[i];
+        var row = document.createElement('div');
+        row.dataset.id = s.__backendId;
+        row.className = 'px-6 py-4 hover:bg-gray-50 transition-colors duration-150';
+
+        var optsRaw = (window.elementSdk && window.elementSdk.config && window.elementSdk.config.status_options) ? window.elementSdk.config.status_options : defaultConfig.status_options;
+        var options = optsRaw.split(',').map(function(o){ return o.trim(); });
+
+        // 修正：HTML文字列を1行で記述
+        row.innerHTML = '<div class="flex items-center justify-between"><div class="flex-1 grid grid-cols-1 md:grid-cols-4 gap-4"><div><p class="text-sm font-medium text-gray-900">'+s.container_number+'</p><p class="text-xs text-gray-500">コンテナ番号</p></div><div><p class="text-sm text-gray-900">'+new Date(s.devan_date).toLocaleDateString('ja-JP')+'</p><p class="text-xs text-gray-500">デバン予定日</p></div><div class="flex items-center"><select data-sel="'+s.__backendId+'" class="status-select text-xs font-medium text-white rounded-full px-2.5 py-0.5 border-none focus:outline-none" style="background-color:'+getStatusColor(s.devan_status)+'">'+options.map(function(v){ return '<option value="'+v+'" '+(v===s.devan_status?'selected':'')+'>'+v+'</option>'; }).join('')+'</select></div><div><p class="text-sm text-gray-900">'+new Date(s.created_at).toLocaleDateString('ja-JP')+'</p><p class="text-xs text-gray-500">登録日</p></div></div><div class="ml-4 flex space-x-2"><button data-del="'+s.__backendId+'" class="text-red-600 hover:text-red-800 transition-colors duration-150 p-1" aria-label="削除"><svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button></div></div>';
+
+        list.appendChild(row);
+      }
+
+      // stats
+      document.getElementById('adm-total').textContent = String(scheduleData.length);
+      document.getElementById('adm-scheduled').textContent = String(scheduleData.filter(function(s){return s.devan_status==='予定';}).length);
+      document.getElementById('adm-inprogress').textContent = String(scheduleData.filter(function(s){return s.devan_status==='進行中';}).length);
+      document.getElementById('adm-completed').textContent = String(scheduleData.filter(function(s){return s.devan_status==='完了';}).length);
+      document.getElementById('adm-record-count').textContent = scheduleData.length + '件のスケジュール';
+
+      // wire events
+      list.querySelectorAll('select[data-sel]').forEach(function(sel){
+        sel.onchange = async function(){
+          sel.disabled = true; sel.style.opacity = 0.6;
+          var id = sel.getAttribute('data-sel');
+          var s = scheduleData.find(function(x){ return x.__backendId===id; });
+          if(!s){ sel.disabled=false; sel.style.opacity=1; return; }
+          var next = Object.assign({}, s, {devan_status: sel.value});
+          var r = await window.dataSdk.update(next);
+          sel.disabled = false; sel.style.opacity = 1;
+          if(!(r && r.isOk)){ sel.value = s.devan_status; toast('ステータス更新に失敗しました','error'); }
+        };
+      });
+      list.querySelectorAll('button[data-del]').forEach(function(btn){
+        btn.onclick = async function(){
+          var id = btn.getAttribute('data-del');
+          var s = scheduleData.find(function(x){ return x.__backendId===id; });
+          if(!s) return;
+          var r = await window.dataSdk.delete(s);
+          if(!(r && r.isOk)) toast('削除に失敗しました','error');
+        };
+      });
+    }
+
+    function renderAll(){
+      renderCustomer();
+      renderAdmin();
+    }
+
+    // ===== UI 共有 =====
+    function setLastUpdateNow(){
+      var el = document.getElementById('last-update');
+      if(!el) return; var now = new Date();
+      el.textContent = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
+    }
+    function toast(msg, type){
+      if (type === void 0) type = 'success';
+      var d = document.createElement('div');
+      d.className = 'fixed top-4 right-4 px-4 py-2 rounded-md text-white z-50 ' + (type==='success'?'bg-green-500':'bg-red-500');
+      d.textContent = msg; document.body.appendChild(d); setTimeout(function(){ d.remove(); }, 3000);
+    }
+
+    // ===== 初期化 =====
+    async function init(){
+      // Data SDK
+      var initRes = await window.dataSdk.init(dataHandler);
+      if(!(initRes && initRes.isOk)) console.error('dataSdk 初期化失敗');
+
+      // Element SDK
+      window.elementSdk.init({ defaultConfig: defaultConfig, onConfigChange: function(cfg){
+        document.getElementById('page-title-cust').textContent = cfg.page_title || defaultConfig.page_title;
+        document.getElementById('page-title-admin').textContent = cfg.page_title || 'デバンスケジュール管理';
+        document.getElementById('company-name').textContent = cfg.company_name || defaultConfig.company_name;
+        renderAll();
+      }});
+
+      // Refresh button (customer)
+      var refreshBtn = document.getElementById('refresh-btn');
+      if (refreshBtn) {
+        refreshBtn.onclick = function(){
+          var icon = document.getElementById('refresh-icon');
+          icon.classList.add('animate-spin');
+          setTimeout(function(){
+            icon.classList.remove('animate-spin');
+            setLastUpdateNow();
+          }, 800);
+        };
+      }
+      setLastUpdateNow();
+
+      // Add form (admin)
+      var form = document.getElementById('add-form');
+      if (form) {
+        form.addEventListener('submit', async function(e){
+          e.preventDefault();
+          var addBtn = document.getElementById('add-button');
+          var spinner = document.getElementById('add-loading');
+          addBtn.disabled = true;
+          spinner.classList.remove('hidden');
+
+          var fd = new FormData(form);
+          var numbers = String(fd.get('container_number')||'').split('\n').map(function(x){return x.trim();}).filter(function(x){return !!x;});
+          var date = fd.get('devan_date');
+          var status = fd.get('devan_status');
+
+          if(numbers.length===0){
+            toast('コンテナ番号を入力してください','error');
+            addBtn.disabled=false;
+            spinner.classList.add('hidden');
+            return;
+          }
+
+          var ok=0, ng=0;
+          for(var i=0;i<numbers.length;i++){
+            var num = numbers[i];
+            var item = { container_number:num, devan_date: date, devan_status: status, created_at: new Date().toISOString() };
+            var r = await window.dataSdk.create(item);
+            (r && r.isOk) ? ok++ : ng++;
+          }
+          form.reset();
+          addBtn.disabled=false;
+          spinner.classList.add('hidden');
+          toast(ok+'件追加'+(ng? '、'+ng+'件失敗':'')+(ng? '':'しました'), ng?'error':'success');
+        });
+      }
+
+      // Mode switching
+      function applyMode(mode){
+        var wantAdmin = mode==='admin';
+        var authed = isAuthed();
+        var isAdmin = wantAdmin && authed;
+
+        // 顧客表示
+        document.getElementById('customer-header').classList.toggle('hidden', isAdmin || wantAdmin);
+        document.getElementById('customer-stats').classList.toggle('hidden', isAdmin || wantAdmin);
+        document.getElementById('customer-list-wrap').classList.toggle('hidden', isAdmin || wantAdmin);
+
+        // 管理表示
+        document.getElementById('admin-header').classList.toggle('hidden', !isAdmin);
+        document.getElementById('admin-form').classList.toggle('hidden', !isAdmin);
+        document.getElementById('admin-stats').classList.toggle('hidden', !isAdmin);
+        document.getElementById('admin-list-wrap').classList.toggle('hidden', !isAdmin);
+
+        // ログインフォーム
+        showLogin(wantAdmin && !authed);
+      }
+
+      var params = new URLSearchParams(location.search);
+      applyMode(params.get('mode')==='admin' ? 'admin' : 'customer');
+
+      document.getElementById('to-customer').onclick = function(){
+        applyMode('customer');
+        history.replaceState(null,'',location.pathname+'?mode=customer');
+      };
+      document.getElementById('to-admin').onclick = function(){
+        applyMode('admin');
+        history.replaceState(null,'',location.pathname+'?mode=admin');
+      };
+
+      // ログイン処理
+      var loginForm = document.getElementById('login-form');
+      if (loginForm){
+        loginForm.addEventListener('submit', function(e){
+          e.preventDefault();
+          var u = (document.getElementById('login-id')||{}).value || '';
+          var p = (document.getElementById('login-pass')||{}).value || '';
+          if(u.trim()===ADMIN_CREDENTIALS.user && p===ADMIN_CREDENTIALS.pass){
+            setAuthed(true); toast('ログインしました'); applyMode('admin');
+          } else { toast('ID またはパスワードが違います','error'); }
+        });
+      }
+
+      var logoutBtn = document.getElementById('logout-btn');
+      if (logoutBtn){
+        logoutBtn.onclick = function(){
+          setAuthed(false);
+          toast('ログアウトしました');
+          applyMode('customer');
+        };
+      }
+
+      renderAll();
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
